@@ -13,7 +13,6 @@ A polished sample document for testing terminal Markdown rendering in `catmd`.
 4. [Blockquotes and Callouts](#blockquotes-and-callouts)
 5. [Code and Syntax Highlighting](#code-and-syntax-highlighting)
 6. [Tables](#tables)
-7. [Final Notes](#final-notes)
 
 ---
 
@@ -139,11 +138,5 @@ fn main() {
 | :----------- | :------------: | ------------: |
 | alpha        |      beta      |           100 |
 | gamma        |      delta     |           250 |
-
----
-
-## Final Notes
-
-This demo intentionally omits unsupported sections like math blocks so the rendered output stays clean and visual.
 
 [playbook]: https://example.com/release-playbook "Release playbook"
