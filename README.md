@@ -2,6 +2,13 @@
 
 `catmd` is a `cat`-like CLI that prints files to stdout and adds rich terminal rendering for Markdown files.
 
+## Install (Homebrew)
+
+```bash
+brew tap schneidermayer/tap
+brew install schneidermayer/tap/catmd
+```
+
 ## Current behavior
 
 - Prints non-Markdown files exactly like `cat`.
@@ -32,10 +39,7 @@ cargo test
 
 ## Distribution
 
-Yes, this can be distributed through Homebrew.
-
-- Recommended first: publish via your own tap (fast, fully under your control).
-- Optional later: submit to `homebrew-core` once the project is stable and broadly useful.
+`catmd` is distributed via the `schneidermayer/tap` Homebrew tap.
 
 See [RELEASE.md](RELEASE.md) for release and Homebrew steps.
 
