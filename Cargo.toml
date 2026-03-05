@@ -1,6 +1,6 @@
 [package]
 name = "catmd"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A cat-like CLI that renders Markdown files with ANSI styling and syntax-highlighted code blocks"
 license = "MIT"
