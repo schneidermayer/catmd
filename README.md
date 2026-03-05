@@ -9,6 +9,10 @@ brew tap schneidermayer/tap
 brew install schneidermayer/tap/catmd
 ```
 
+## Demo
+
+![catmd terminal demo](docs/images/catmd-demo.png)
+
 ## Current behavior
 
 - Prints non-Markdown files exactly like `cat`.
@@ -42,9 +46,3 @@ cargo test
 `catmd` is distributed via the `schneidermayer/tap` Homebrew tap.
 
 See [RELEASE.md](RELEASE.md) for release and Homebrew steps.
-
-## Next milestones
-
-- Add richer table and blockquote rendering.
-- Add configurable styles/themes for non-code Markdown elements.
-- Add integration tests that assert behavior against fixture files.
