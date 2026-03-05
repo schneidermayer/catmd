@@ -6,6 +6,7 @@
 
 - Prints non-Markdown files exactly like `cat`.
 - Renders `*.md`, `*.markdown`, `*.mkd`, and `*.mdown` with ANSI styling when stdout is a TTY.
+- `--markdown` forces Markdown rendering for all inputs, including stdin and non-TTY stdout.
 - Highlights fenced code blocks (via `syntect`) in rendered Markdown.
 - Supports `-` as stdin, and multiple input files in sequence.
 
@@ -28,6 +29,15 @@ cargo build
 cargo run -- README.md
 cargo test
 ```
+
+## Distribution
+
+Yes, this can be distributed through Homebrew.
+
+- Recommended first: publish via your own tap (fast, fully under your control).
+- Optional later: submit to `homebrew-core` once the project is stable and broadly useful.
+
+See [RELEASE.md](RELEASE.md) for release and Homebrew steps.
 
 ## Next milestones
 

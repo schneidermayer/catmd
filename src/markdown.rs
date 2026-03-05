@@ -1,5 +1,5 @@
 use once_cell::sync::Lazy;
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
@@ -15,16 +15,15 @@ struct InlineStyle {
     strong: usize,
     emphasis: usize,
     strikethrough: usize,
-    heading: bool,
+    heading_level: Option<HeadingLevel>,
 }
 
 impl InlineStyle {
     fn ansi_prefix(self) -> Option<String> {
         let mut codes = Vec::new();
 
-        if self.heading {
-            codes.push("1");
-            codes.push("38;5;39");
+        if let Some(level) = self.heading_level {
+            codes.extend(heading_codes(level));
         }
 
         if self.strong > 0 {
@@ -44,6 +43,17 @@ impl InlineStyle {
         } else {
             Some(format!("\x1b[{}m", codes.join(";")))
         }
+    }
+}
+
+fn heading_codes(level: HeadingLevel) -> &'static [&'static str] {
+    match level {
+        HeadingLevel::H1 => &["1", "4", "38;5;45"],
+        HeadingLevel::H2 => &["1", "38;5;39"],
+        HeadingLevel::H3 => &["1", "38;5;44"],
+        HeadingLevel::H4 => &["4", "38;5;110"],
+        HeadingLevel::H5 => &["38;5;109"],
+        HeadingLevel::H6 => &["2", "38;5;103"],
     }
 }
 
@@ -126,8 +136,9 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
 
         match event {
             Event::Start(tag) => match tag {
-                Tag::Heading(..) => {
-                    inline.heading = true;
+                Tag::Heading(level, ..) => {
+                    ensure_blank_line(&mut out);
+                    inline.heading_level = Some(level);
                 }
                 Tag::Strong => inline.strong += 1,
                 Tag::Emphasis => inline.emphasis += 1,
@@ -163,8 +174,8 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
             },
             Event::End(tag) => match tag {
                 Tag::Heading(..) => {
-                    inline.heading = false;
-                    out.push('\n');
+                    inline.heading_level = None;
+                    ensure_blank_line(&mut out);
                 }
                 Tag::Strong => inline.strong = inline.strong.saturating_sub(1),
                 Tag::Emphasis => inline.emphasis = inline.emphasis.saturating_sub(1),
@@ -172,7 +183,9 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
                 Tag::Paragraph => out.push('\n'),
                 Tag::Item => out.push('\n'),
                 Tag::List(_) => {
-                    if !out.ends_with('\n') {
+                    list_stack.pop();
+
+                    if list_stack.is_empty() && !out.ends_with('\n') {
                         out.push('\n');
                     }
                 }
@@ -234,6 +247,25 @@ fn push_styled_text(out: &mut String, text: &str, style: InlineStyle) {
     }
 }
 
+fn ensure_blank_line(out: &mut String) {
+    if out.is_empty() {
+        return;
+    }
+
+    let trailing_newlines = out
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|&&byte| byte == b'\n')
+        .count();
+
+    match trailing_newlines {
+        0 => out.push_str("\n\n"),
+        1 => out.push('\n'),
+        _ => {}
+    }
+}
+
 fn render_code_block(code: &str, language: Option<&str>, theme_name: &str) -> String {
     let syntax = language
         .and_then(|lang| SYNTAXES.find_syntax_by_token(lang))
@@ -269,7 +301,7 @@ mod tests {
     #[test]
     fn renders_heading_with_ansi() {
         let rendered = render_markdown("# Hello", DEFAULT_THEME);
-        assert!(rendered.contains("\x1b[1;38;5;39mHello\x1b[0m"));
+        assert!(rendered.contains("\x1b[1;4;38;5;45mHello\x1b[0m"));
     }
 
     #[test]
@@ -277,5 +309,31 @@ mod tests {
         let rendered = render_markdown("Use `catmd`", DEFAULT_THEME);
         assert!(rendered.contains("catmd"));
         assert!(rendered.contains("\x1b[48;5;236m"));
+    }
+
+    #[test]
+    fn headings_are_surrounded_by_blank_lines() {
+        let rendered = render_markdown("before\n\n# Title\n\nafter", DEFAULT_THEME);
+        assert!(rendered.contains("before\n\n\x1b[1;4;38;5;45mTitle\x1b[0m\n\nafter"));
+    }
+
+    #[test]
+    fn heading_levels_have_distinct_styles() {
+        let rendered = render_markdown("# One\n## Two\n### Three", DEFAULT_THEME);
+
+        assert!(rendered.contains("\x1b[1;4;38;5;45mOne\x1b[0m"));
+        assert!(rendered.contains("\x1b[1;38;5;39mTwo\x1b[0m"));
+        assert!(rendered.contains("\x1b[1;38;5;44mThree\x1b[0m"));
+    }
+
+    #[test]
+    fn list_state_resets_between_separate_lists() {
+        let rendered = render_markdown(
+            "1. first\n2. second\n\nbreak\n\n1. third\n2. fourth\n",
+            DEFAULT_THEME,
+        );
+
+        assert!(rendered.contains("break\n1. third\n2. fourth\n"));
+        assert!(!rendered.contains("break\n  1. third"));
     }
 }

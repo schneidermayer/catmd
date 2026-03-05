@@ -148,12 +148,16 @@ fn write_markdown(bytes: &[u8], theme: &str, out: &mut dyn Write) -> Result<()> 
 }
 
 fn should_render_markdown(path: Option<&Path>, config: &RunConfig) -> bool {
-    if config.plain || !config.stdout_is_tty {
+    if config.plain {
         return false;
     }
 
     if config.force_markdown {
         return true;
+    }
+
+    if !config.stdout_is_tty {
+        return false;
     }
 
     matches!(path, Some(path) if is_markdown_path(path))
@@ -209,9 +213,24 @@ mod tests {
             plain: false,
             force_markdown: true,
             theme: "base16-ocean.dark".to_owned(),
-            stdout_is_tty: true,
+            stdout_is_tty: false,
         };
 
         assert!(should_render_markdown(None, &config));
+    }
+
+    #[test]
+    fn plain_mode_disables_markdown_even_when_forced() {
+        let config = RunConfig {
+            plain: true,
+            force_markdown: true,
+            theme: "base16-ocean.dark".to_owned(),
+            stdout_is_tty: true,
+        };
+
+        assert!(!should_render_markdown(
+            Some(Path::new("README.md")),
+            &config
+        ));
     }
 }
