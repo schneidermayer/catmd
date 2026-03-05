@@ -9,7 +9,14 @@ This repository is public. Assume everything in git history, issues, and PRs is 
 - Use GitHub Actions encrypted secrets for CI/CD tokens.
 - Rotate a secret immediately if it was ever exposed in a commit.
 
-## Release Checklist
+## Automation Setup (One-Time)
+
+1. Ensure tap repository exists: `schneidermayer/homebrew-tap`.
+2. Create a GitHub token with write access to `schneidermayer/homebrew-tap`.
+3. Add token as secret `HOMEBREW_TAP_TOKEN` in `schneidermayer/catmd`.
+4. Confirm workflow file exists: `.github/workflows/release.yml`.
+
+## Automated Release Flow
 
 1. Ensure `main` is clean and up to date.
 2. Run quality gates:
@@ -18,82 +25,44 @@ This repository is public. Assume everything in git history, issues, and PRs is 
    cargo clippy --all-targets --all-features -- -D warnings
    cargo test --all-targets --all-features
    ```
-3. Bump the crate version in `Cargo.toml`:
-   ```bash
-   # edit Cargo.toml version = "X.Y.Z"
-   cargo check
-   ```
-4. Commit and tag:
+3. Bump version in `Cargo.toml` and `Cargo.lock` to `X.Y.Z`.
+4. Commit and push:
    ```bash
    git add Cargo.toml Cargo.lock
-   git commit -m "release: vX.Y.Z"
-   git tag vX.Y.Z
+   git commit -m "release: bump version to vX.Y.Z"
    git push origin main
+   ```
+5. Tag and push:
+   ```bash
+   git tag vX.Y.Z
    git push origin vX.Y.Z
    ```
-5. Create a GitHub release:
-   ```bash
-   gh release create vX.Y.Z --generate-notes
-   ```
 
-## Homebrew Tap Release
+Pushing tag `vX.Y.Z` triggers the `Release` workflow, which:
 
-Use a personal tap for distribution.
+- computes release tarball SHA256,
+- creates/updates the GitHub release notes,
+- updates `Formula/catmd.rb` in `schneidermayer/homebrew-tap`,
+- commits and pushes tap changes.
 
-1. Create `schneidermayer/homebrew-tap` on GitHub.
-2. Clone tap locally:
-   ```bash
-   git clone git@github.com:schneidermayer/homebrew-tap.git
-   cd homebrew-tap
-   mkdir -p Formula
-   ```
-3. Compute checksum for the release tarball:
-   ```bash
-   VERSION=X.Y.Z
-   curl -L -o /tmp/catmd.tar.gz \
-     "https://github.com/schneidermayer/catmd/archive/refs/tags/v${VERSION}.tar.gz"
-   shasum -a 256 /tmp/catmd.tar.gz
-   ```
-4. Create `Formula/catmd.rb`:
-   ```ruby
-   class Catmd < Formula
-     desc "cat-like CLI that renders Markdown with ANSI styling"
-     homepage "https://github.com/schneidermayer/catmd"
-     url "https://github.com/schneidermayer/catmd/archive/refs/tags/vX.Y.Z.tar.gz"
-     sha256 "REPLACE_WITH_SHA256"
-     license "MIT"
+## Verification
 
-     depends_on "rust" => :build
+```bash
+gh run list --workflow Release --limit 1
+brew tap schneidermayer/tap
+brew update
+brew audit --strict --new --formula schneidermayer/tap/catmd
+brew install schneidermayer/tap/catmd
+catmd --version
+```
 
-     def install
-       system "cargo", "install", *std_cargo_args(path: ".")
-     end
+## Manual Recovery (If Workflow Fails)
 
-     test do
-       assert_match version.to_s, shell_output("#{bin}/catmd --version")
-     end
-   end
-   ```
-5. Validate formula locally:
-   ```bash
-   brew audit --strict Formula/catmd.rb
-   brew install --build-from-source Formula/catmd.rb
-   brew test catmd
-   ```
-6. Commit and publish tap:
-   ```bash
-   git add Formula/catmd.rb
-   git commit -m "catmd vX.Y.Z"
-   git push origin main
-   ```
-7. End-user install:
-   ```bash
-   brew tap schneidermayer/tap
-   brew install schneidermayer/tap/catmd
-   ```
+1. Re-run failed job from GitHub Actions.
+2. If needed, update `Formula/catmd.rb` in the tap repo manually using the release tarball URL and SHA256.
+3. Push tap fix and re-run `brew audit --strict --new --formula schneidermayer/tap/catmd`.
 
 ## Notes
 
 - Keep release tags immutable once published.
-- Prefer `--locked` builds if dependency reproducibility becomes a requirement in your tap.
-- If you automate release publishing, use least-privileged tokens only.
+- Prefer least-privileged tokens for automation.
