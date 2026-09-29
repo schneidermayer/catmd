@@ -4,6 +4,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+use unicode_width::UnicodeWidthStr;
 
 const DEFAULT_THEME: &str = "base16-ocean.dark";
 
@@ -19,7 +20,7 @@ struct InlineStyle {
 }
 
 impl InlineStyle {
-    fn ansi_prefix(self) -> Option<String> {
+    fn codes(self) -> Vec<&'static str> {
         let mut codes = Vec::new();
 
         if let Some(level) = self.heading_level {
@@ -37,6 +38,12 @@ impl InlineStyle {
         if self.strikethrough > 0 {
             codes.push("9");
         }
+
+        codes
+    }
+
+    fn ansi_prefix(self) -> Option<String> {
+        let codes = self.codes();
 
         if codes.is_empty() {
             None
@@ -88,14 +95,42 @@ struct CodeBlockBuffer {
     content: String,
 }
 
+const TABLE_BORDER_CODES: &str = "38;5;244";
+const TABLE_HEADER_CODES: &str = "1;38;5;39";
+
+/// A rendered table cell. `text` may contain ANSI escapes, so the visible
+/// terminal width is tracked separately in `width`.
+#[derive(Debug, Default)]
+struct TableCell {
+    text: String,
+    width: usize,
+}
+
+impl TableCell {
+    fn push_styled(&mut self, text: &str, codes: &[&str]) {
+        self.width += text.width();
+
+        if codes.is_empty() {
+            self.text.push_str(text);
+        } else {
+            self.text.push_str("\x1b[");
+            self.text.push_str(&codes.join(";"));
+            self.text.push('m');
+            self.text.push_str(text);
+            self.text.push_str("\x1b[0m");
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TableState {
     alignments: Vec<Alignment>,
-    header: Vec<String>,
-    rows: Vec<Vec<String>>,
-    current_row: Vec<String>,
-    current_cell: String,
+    header: Vec<TableCell>,
+    rows: Vec<Vec<TableCell>>,
+    current_row: Vec<TableCell>,
+    current_cell: TableCell,
     in_header: bool,
+    inline: InlineStyle,
     link_targets: Vec<String>,
 }
 
@@ -106,15 +141,36 @@ impl TableState {
             header: Vec::new(),
             rows: Vec::new(),
             current_row: Vec::new(),
-            current_cell: String::new(),
+            current_cell: TableCell::default(),
             in_header: false,
+            inline: InlineStyle::default(),
             link_targets: Vec::new(),
         }
     }
 
+    fn push_text(&mut self, text: &str) {
+        let mut codes = Vec::new();
+        if self.in_header {
+            codes.push(TABLE_HEADER_CODES);
+        }
+        codes.extend(self.inline.codes());
+
+        self.current_cell.push_styled(text, &codes);
+    }
+
+    fn push_code(&mut self, text: &str) {
+        self.current_cell
+            .push_styled(&format!(" {text} "), &["48;5;236", "38;5;223"]);
+    }
+
+    fn push_link_target(&mut self, target: &str) {
+        self.current_cell
+            .push_styled(&format!(" ({target})"), &["2"]);
+    }
+
     fn finish_cell(&mut self) {
-        self.current_row.push(self.current_cell.trim().to_owned());
-        self.current_cell.clear();
+        self.current_row
+            .push(std::mem::take(&mut self.current_cell));
     }
 
     fn finish_row(&mut self) {
@@ -138,34 +194,26 @@ impl TableState {
 
         let mut widths = vec![3; columns];
 
-        for (index, cell) in self.header.iter().enumerate() {
-            widths[index] = widths[index].max(cell.chars().count());
-        }
-
-        for row in &self.rows {
+        for row in std::iter::once(&self.header).chain(&self.rows) {
             for (index, cell) in row.iter().enumerate() {
-                widths[index] = widths[index].max(cell.chars().count());
+                widths[index] = widths[index].max(cell.width);
             }
         }
 
         let mut out = String::new();
 
+        out.push_str(&render_table_border(&widths, '┌', '┬', '┐'));
+
         if !self.header.is_empty() {
-            out.push_str(&render_table_row(
-                &self.header,
-                &widths,
-                &self.alignments,
-                false,
-            ));
-            out.push('\n');
-            out.push_str(&render_table_separator(&widths, &self.alignments));
-            out.push('\n');
+            out.push_str(&render_table_row(&self.header, &widths, &self.alignments));
+            out.push_str(&render_table_border(&widths, '├', '┼', '┤'));
         }
 
         for row in &self.rows {
-            out.push_str(&render_table_row(row, &widths, &self.alignments, false));
-            out.push('\n');
+            out.push_str(&render_table_row(row, &widths, &self.alignments));
         }
+
+        out.push_str(&render_table_border(&widths, '└', '┴', '┘'));
 
         out
     }
@@ -370,7 +418,10 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
                     Event::Start(tag) => match tag {
                         Tag::TableHead => table.in_header = true,
                         Tag::TableRow => table.current_row.clear(),
-                        Tag::TableCell => table.current_cell.clear(),
+                        Tag::TableCell => table.current_cell = TableCell::default(),
+                        Tag::Strong => table.inline.strong += 1,
+                        Tag::Emphasis => table.inline.emphasis += 1,
+                        Tag::Strikethrough => table.inline.strikethrough += 1,
                         Tag::Link(_, destination, _) | Tag::Image(_, destination, _) => {
                             table.link_targets.push(destination.to_string());
                         }
@@ -385,14 +436,17 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
                         }
                         Tag::TableCell => table.finish_cell(),
                         Tag::TableRow => table.finish_row(),
+                        Tag::Strong => table.inline.strong = table.inline.strong.saturating_sub(1),
+                        Tag::Emphasis => {
+                            table.inline.emphasis = table.inline.emphasis.saturating_sub(1)
+                        }
+                        Tag::Strikethrough => {
+                            table.inline.strikethrough =
+                                table.inline.strikethrough.saturating_sub(1)
+                        }
                         Tag::Link(..) | Tag::Image(..) => {
                             if let Some(target) = table.link_targets.pop() {
-                                if !table.current_cell.is_empty() {
-                                    table.current_cell.push(' ');
-                                }
-                                table.current_cell.push('(');
-                                table.current_cell.push_str(&target);
-                                table.current_cell.push(')');
+                                table.push_link_target(&target);
                             }
                         }
                         Tag::Table(_) => {
@@ -401,16 +455,10 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
                         }
                         _ => {}
                     },
-                    Event::Text(text) | Event::Code(text) | Event::Html(text) => {
-                        table.current_cell.push_str(&text);
-                    }
-                    Event::FootnoteReference(name) => {
-                        table.current_cell.push('[');
-                        table.current_cell.push('^');
-                        table.current_cell.push_str(&name);
-                        table.current_cell.push(']');
-                    }
-                    Event::SoftBreak | Event::HardBreak => table.current_cell.push(' '),
+                    Event::Text(text) | Event::Html(text) => table.push_text(&text),
+                    Event::Code(text) => table.push_code(&text),
+                    Event::FootnoteReference(name) => table.push_text(&format!("[^{name}]")),
+                    Event::SoftBreak | Event::HardBreak => table.push_text(" "),
                     _ => {}
                 }
             }
@@ -701,58 +749,38 @@ fn ensure_blockquote_prefix(out: &mut String, depth: usize, callout: Option<Call
     out.push_str(" \x1b[0m");
 }
 
-fn render_table_row(
-    row: &[String],
-    widths: &[usize],
-    alignments: &[Alignment],
-    is_separator: bool,
-) -> String {
-    let mut out = String::new();
-    out.push('|');
+fn render_table_border(widths: &[usize], left: char, middle: char, right: char) -> String {
+    let segments: Vec<String> = widths.iter().map(|width| "─".repeat(width + 2)).collect();
+    let mut separator = [0u8; 4];
+
+    format!(
+        "\x1b[{TABLE_BORDER_CODES}m{left}{}{right}\x1b[0m\n",
+        segments.join(middle.encode_utf8(&mut separator))
+    )
+}
+
+fn render_table_row(row: &[TableCell], widths: &[usize], alignments: &[Alignment]) -> String {
+    let border = format!("\x1b[{TABLE_BORDER_CODES}m│\x1b[0m");
+    let empty = TableCell::default();
+    let mut out = border.clone();
 
     for (index, width) in widths.iter().enumerate() {
-        out.push(' ');
-
         let alignment = alignments.get(index).copied().unwrap_or(Alignment::None);
-        let value = row.get(index).map(String::as_str).unwrap_or("");
-
-        if is_separator {
-            out.push_str(&table_separator_cell(*width, alignment));
-        } else {
-            out.push_str(&pad_cell(value, *width, alignment));
-        }
+        let cell = row.get(index).unwrap_or(&empty);
 
         out.push(' ');
-        out.push('|');
+        out.push_str(&pad_cell(cell, *width, alignment));
+        out.push(' ');
+        out.push_str(&border);
     }
 
+    out.push('\n');
     out
 }
 
-fn render_table_separator(widths: &[usize], alignments: &[Alignment]) -> String {
-    let empty: Vec<String> = Vec::new();
-    render_table_row(&empty, widths, alignments, true)
-}
-
-fn table_separator_cell(width: usize, alignment: Alignment) -> String {
-    let width = width.max(3);
-
-    match alignment {
-        Alignment::Left => format!(":{}", "-".repeat(width.saturating_sub(1))),
-        Alignment::Center => format!(":{}:", "-".repeat(width.saturating_sub(2).max(1))),
-        Alignment::Right => format!("{}:", "-".repeat(width.saturating_sub(1))),
-        Alignment::None => "-".repeat(width),
-    }
-}
-
-fn pad_cell(value: &str, width: usize, alignment: Alignment) -> String {
-    let len = value.chars().count();
-
-    if len >= width {
-        return value.to_owned();
-    }
-
-    let padding = width - len;
+fn pad_cell(cell: &TableCell, width: usize, alignment: Alignment) -> String {
+    let padding = width.saturating_sub(cell.width);
+    let value = &cell.text;
 
     match alignment {
         Alignment::Left | Alignment::None => format!("{value}{}", " ".repeat(padding)),
@@ -860,15 +888,71 @@ mod tests {
         );
     }
 
+    fn strip_ansi(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut chars = input.chars();
+
+        while let Some(ch) = chars.next() {
+            if ch == '\x1b' {
+                for next in chars.by_ref() {
+                    if next == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+
+        out
+    }
+
     #[test]
-    fn tables_render_with_borders_and_alignment_row() {
+    fn tables_render_with_box_borders_and_alignment() {
         let rendered = render_markdown(
             "| A | B |\n| :-- | --: |\n| left | right |\n",
             DEFAULT_THEME,
         );
 
-        assert!(rendered.contains("| A    |     B |"));
-        assert!(rendered.contains("| :--- | ----: |"));
-        assert!(rendered.contains("| left | right |"));
+        assert_eq!(
+            strip_ansi(&rendered),
+            "┌──────┬───────┐\n\
+             │ A    │     B │\n\
+             ├──────┼───────┤\n\
+             │ left │ right │\n\
+             └──────┴───────┘\n\n"
+        );
+    }
+
+    #[test]
+    fn table_header_is_highlighted() {
+        let rendered = render_markdown("| Name |\n| --- |\n| value |\n", DEFAULT_THEME);
+
+        assert!(rendered.contains("\x1b[1;38;5;39mName\x1b[0m"));
+        assert!(!rendered.contains("\x1b[1;38;5;39mvalue"));
+    }
+
+    #[test]
+    fn table_cells_keep_inline_formatting() {
+        let rendered = render_markdown(
+            "| A | B |\n| --- | --- |\n| **bold** | `code` |\n",
+            DEFAULT_THEME,
+        );
+
+        assert!(rendered.contains("\x1b[1mbold\x1b[0m"));
+        assert!(rendered.contains("\x1b[48;5;236;38;5;223m code \x1b[0m"));
+        assert!(strip_ansi(&rendered).contains("│ bold │  code  │"));
+    }
+
+    #[test]
+    fn table_columns_align_with_wide_characters() {
+        let rendered = render_markdown(
+            "| Name | Ok |\n| --- | --- |\n| 日本語 | ✅ |\n| abc | x |\n",
+            DEFAULT_THEME,
+        );
+        let plain = strip_ansi(&rendered);
+
+        assert!(plain.contains("│ 日本語 │ ✅  │"));
+        assert!(plain.contains("│ abc    │ x   │"));
     }
 }
