@@ -106,9 +106,15 @@ struct TableCell {
     width: usize,
 }
 
-impl TableCell {
+#[derive(Debug, Default)]
+struct TableCellBuffer {
+    text: String,
+    plain_text: String,
+}
+
+impl TableCellBuffer {
     fn push_styled(&mut self, text: &str, codes: &[&str]) {
-        self.width += text.width();
+        self.plain_text.push_str(text);
 
         if codes.is_empty() {
             self.text.push_str(text);
@@ -120,6 +126,14 @@ impl TableCell {
             self.text.push_str("\x1b[0m");
         }
     }
+
+    fn finish(self) -> TableCell {
+        // Emoji sequences can span parser events, so measure the complete cell.
+        TableCell {
+            text: self.text,
+            width: self.plain_text.width(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -128,7 +142,7 @@ struct TableState {
     header: Vec<TableCell>,
     rows: Vec<Vec<TableCell>>,
     current_row: Vec<TableCell>,
-    current_cell: TableCell,
+    current_cell: TableCellBuffer,
     in_header: bool,
     inline: InlineStyle,
     link_targets: Vec<String>,
@@ -141,7 +155,7 @@ impl TableState {
             header: Vec::new(),
             rows: Vec::new(),
             current_row: Vec::new(),
-            current_cell: TableCell::default(),
+            current_cell: TableCellBuffer::default(),
             in_header: false,
             inline: InlineStyle::default(),
             link_targets: Vec::new(),
@@ -170,7 +184,7 @@ impl TableState {
 
     fn finish_cell(&mut self) {
         self.current_row
-            .push(std::mem::take(&mut self.current_cell));
+            .push(std::mem::take(&mut self.current_cell).finish());
     }
 
     fn finish_row(&mut self) {
@@ -418,7 +432,7 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
                     Event::Start(tag) => match tag {
                         Tag::TableHead => table.in_header = true,
                         Tag::TableRow => table.current_row.clear(),
-                        Tag::TableCell => table.current_cell = TableCell::default(),
+                        Tag::TableCell => table.current_cell = TableCellBuffer::default(),
                         Tag::Strong => table.inline.strong += 1,
                         Tag::Emphasis => table.inline.emphasis += 1,
                         Tag::Strikethrough => table.inline.strikethrough += 1,
@@ -954,5 +968,30 @@ mod tests {
 
         assert!(plain.contains("│ 日本語 │ ✅  │"));
         assert!(plain.contains("│ abc    │ x   │"));
+    }
+
+    #[test]
+    fn tables_render_entity_encoded_emoji_like_literal_emoji() {
+        for (literal, encoded) in [
+            ("❤️", "❤&#xFE0F;"),
+            ("1️⃣", "1&#xFE0F;&#x20E3;"),
+            ("👨‍👩‍👧‍👦", "👨&#x200D;👩&#x200D;👧&#x200D;👦"),
+            ("👍🏽", "👍&#x1F3FD;"),
+            ("🇨🇭", "🇨&#x1F1ED;"),
+        ] {
+            let markdown = format!(
+                "| {literal} | Center | Right |\n\
+                 | :--- | :---: | ---: |\n\
+                 | {literal} | **{literal}** | {literal} |\n\
+                 | aa | aa | aa |\n"
+            );
+            let literal_table = strip_ansi(&render_markdown(&markdown, DEFAULT_THEME));
+            let encoded_table = strip_ansi(&render_markdown(
+                &markdown.replace(literal, encoded),
+                DEFAULT_THEME,
+            ));
+
+            assert_eq!(encoded_table, literal_table, "entity sequence: {encoded}");
+        }
     }
 }
