@@ -538,11 +538,7 @@ pub fn render_markdown(input: &str, theme_name: &str) -> String {
                         out.push('\n');
                     }
                 }
-                Tag::FootnoteDefinition(_) => {
-                    if !out.ends_with('\n') {
-                        out.push('\n');
-                    }
-                }
+                Tag::FootnoteDefinition(_) if !out.ends_with('\n') => out.push('\n'),
                 _ => {}
             },
             Event::Text(text) => {
