@@ -255,7 +255,8 @@ fn absent_or_invalid_columns_falls_back_to_eighty_columns() {
 
 #[test]
 fn width_zero_is_rejected() {
-    let output = run_catmd(&["--markdown", "--width", "0", "-"], Some(b"text\n"));
+    // Argument validation exits before stdin is read; writing would race that exit.
+    let output = run_catmd(&["--markdown", "--width", "0", "-"], None);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
