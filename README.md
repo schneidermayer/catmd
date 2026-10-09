@@ -18,6 +18,8 @@ brew install schneidermayer/tap/catmd
 - Prints non-Markdown files exactly like `cat`.
 - Renders `*.md`, `*.markdown`, `*.mkd`, and `*.mdown` with ANSI styling when stdout is a TTY.
 - `--markdown` forces Markdown rendering for all inputs, including stdin and non-TTY stdout.
+- Wraps table cells to fit the stdout terminal width, preserving alignment and inline formatting. `--width COLUMNS` sets an explicit table width; when terminal dimensions are unavailable, a positive `COLUMNS` environment value is used, or 80 columns by default.
+- Preserves paragraph spacing and explicit line breaks, including `<br>` inside table cells.
 - Highlights fenced code blocks (via `syntect`) in rendered Markdown.
 - Supports `-` as stdin, and multiple input files in sequence.
 
@@ -28,6 +30,7 @@ catmd README.md
 catmd notes.txt README.md
 catmd - < README.md
 catmd --markdown - < README.md
+catmd --markdown --width 100 README.md
 catmd --plain README.md
 ```
 

@@ -39,6 +39,14 @@ struct Cli {
     )]
     theme: String,
 
+    #[arg(
+        long,
+        value_name = "COLUMNS",
+        value_parser = parse_width,
+        help = "Maximum table width in terminal columns (defaults to the terminal width)"
+    )]
+    width: Option<usize>,
+
     #[arg(value_name = "FILE", help = "Input files (`-` for stdin)")]
     files: Vec<PathBuf>,
 }
@@ -49,6 +57,7 @@ struct RunConfig {
     force_markdown: bool,
     theme: String,
     stdout_is_tty: bool,
+    width: usize,
 }
 
 fn main() -> ExitCode {
@@ -69,6 +78,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         force_markdown: cli.force_markdown,
         theme: cli.theme,
         stdout_is_tty: io::stdout().is_terminal(),
+        width: markdown_width(cli.width),
     };
 
     let mut had_errors = false;
@@ -107,7 +117,7 @@ fn process_file(path: &Path, config: &RunConfig, out: &mut dyn Write) -> Result<
     if should_render_markdown(Some(path), config) {
         let bytes = std::fs::read(path)
             .with_context(|| format!("failed to read input file '{}'", path.display()))?;
-        write_markdown(&bytes, &config.theme, out)
+        write_markdown(&bytes, &config.theme, config.width, out)
             .with_context(|| format!("failed to render markdown in '{}'", path.display()))
     } else {
         let file = File::open(path)
@@ -125,7 +135,7 @@ fn process_stdin(config: &RunConfig, out: &mut dyn Write) -> Result<()> {
         stdin
             .read_to_end(&mut bytes)
             .context("failed to read stdin for markdown rendering")?;
-        write_markdown(&bytes, &config.theme, out)
+        write_markdown(&bytes, &config.theme, config.width, out)
     } else {
         copy_raw(&mut stdin, out)
     }
@@ -136,15 +146,46 @@ fn copy_raw(mut reader: impl Read, out: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-fn write_markdown(bytes: &[u8], theme: &str, out: &mut dyn Write) -> Result<()> {
+fn write_markdown(bytes: &[u8], theme: &str, width: usize, out: &mut dyn Write) -> Result<()> {
     let content = match std::str::from_utf8(bytes) {
         Ok(text) => text.to_owned(),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
     };
 
-    let rendered = markdown::render_markdown(&content, theme);
+    let rendered = markdown::render_markdown(&content, theme, width);
     out.write_all(rendered.as_bytes())
         .context("failed to write rendered markdown")
+}
+
+fn parse_width(value: &str) -> std::result::Result<usize, String> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|width| *width > 0)
+        .ok_or_else(|| "width must be a positive integer".to_owned())
+}
+
+fn markdown_width(override_width: Option<usize>) -> usize {
+    override_width
+        .or_else(stdout_terminal_width)
+        .or_else(|| {
+            std::env::var("COLUMNS")
+                .ok()
+                .and_then(|value| parse_width(&value).ok())
+        })
+        .unwrap_or(80)
+}
+
+#[cfg(any(unix, windows))]
+fn stdout_terminal_width() -> Option<usize> {
+    terminal_size::terminal_size_of(io::stdout())
+        .map(|(terminal_size::Width(width), _)| usize::from(width))
+        .filter(|width| *width > 0)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn stdout_terminal_width() -> Option<usize> {
+    None
 }
 
 fn should_render_markdown(path: Option<&Path>, config: &RunConfig) -> bool {
@@ -199,6 +240,7 @@ mod tests {
             force_markdown: false,
             theme: "base16-ocean.dark".to_owned(),
             stdout_is_tty: false,
+            width: 80,
         };
 
         assert!(!should_render_markdown(
@@ -214,6 +256,7 @@ mod tests {
             force_markdown: true,
             theme: "base16-ocean.dark".to_owned(),
             stdout_is_tty: false,
+            width: 80,
         };
 
         assert!(should_render_markdown(None, &config));
@@ -226,11 +269,27 @@ mod tests {
             force_markdown: true,
             theme: "base16-ocean.dark".to_owned(),
             stdout_is_tty: true,
+            width: 80,
         };
 
         assert!(!should_render_markdown(
             Some(Path::new("README.md")),
             &config
         ));
+    }
+
+    #[test]
+    fn width_override_accepts_positive_columns() {
+        let cli = Cli::try_parse_from(["catmd", "--width", "120", "README.md"])
+            .expect("positive width should be accepted");
+        assert_eq!(cli.width, Some(120));
+        assert_eq!(markdown_width(cli.width), 120);
+    }
+
+    #[test]
+    fn width_override_rejects_invalid_columns() {
+        for value in ["0", "-1", "abc", "1.5"] {
+            assert!(Cli::try_parse_from(["catmd", "--width", value]).is_err());
+        }
     }
 }
