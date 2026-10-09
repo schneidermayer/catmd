@@ -1097,13 +1097,23 @@ mod tests {
     #[test]
     fn footnotes_keep_the_marker_with_the_first_paragraph() {
         let rendered = render_markdown(
-            "Text[^note].\n\n[^note]: First paragraph.\n\n    Second paragraph.\n\nAfterward.\n",
+            "Text[^note][^other].\n\n\
+             [^note]: First paragraph.\n\n    Second paragraph.\n\n\
+             - After first note\n\nBetween notes.\n\n\
+             [^other]: Another note.\n\n\
+             - After second note\n\nAfterward.\n",
             DEFAULT_THEME,
         );
 
+        // Paragraphs after the lists need their own separation, proving the
+        // footnote context was cleared after each definition.
         assert_eq!(
             strip_ansi(&rendered),
-            "Text[^note].\n\n[^note]: First paragraph.\n\nSecond paragraph.\n\nAfterward.\n\n"
+            "Text[^note][^other].\n\n\
+             [^note]: First paragraph.\n\nSecond paragraph.\n\n\
+             - After first note\n\nBetween notes.\n\n\
+             [^other]: Another note.\n\n\
+             - After second note\n\nAfterward.\n\n"
         );
     }
 
